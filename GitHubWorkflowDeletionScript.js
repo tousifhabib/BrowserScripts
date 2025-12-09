@@ -1,68 +1,83 @@
-(async function deleteAllVisibleRuns() {
-    // 1. Select all deletion forms inside the dialogs
-    // We look for forms inside dialogs that have the hidden _method="delete" input
-    const deleteForms = Array.from(document.querySelectorAll('dialog form'))
-        .filter(form => form.querySelector('input[name="_method"][value="delete"]'));
+// Self-sustaining GitHub Actions workflow run deleter
+(async function() {
+    const STORAGE_KEY = 'gh_auto_delete_runs';
+    
+    async function deleteAllOnPage() {
+        const deleteForms = Array.from(document.querySelectorAll('dialog form'))
+            .filter(form => form.querySelector('input[name="_method"][value="delete"]'));
 
-    if (deleteForms.length === 0) {
-        console.log("No delete forms found on this page.");
-        return;
+        if (deleteForms.length === 0) {
+            console.log("✅ No more workflow runs to delete. All done!");
+            sessionStorage.removeItem(STORAGE_KEY); // Stop the loop
+            return false;
+        }
+
+        console.log(`🗑️ Found ${deleteForms.length} workflow runs. Deleting...`);
+
+        let deletedCount = 0;
+        for (const form of deleteForms) {
+            const url = form.getAttribute('action');
+            const token = form.querySelector('input[name="authenticity_token"]')?.value;
+
+            if (!token) {
+                console.warn(`Skipping ${url}: no token`);
+                continue;
+            }
+
+            const formData = new URLSearchParams();
+            formData.append('_method', 'delete');
+            formData.append('authenticity_token', token);
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                if (response.ok) {
+                    deletedCount++;
+                    console.log(`[${deletedCount}/${deleteForms.length}] Deleted: ${url.split('/').pop()}`);
+                } else {
+                    console.error(`Failed: ${response.statusText}`);
+                }
+            } catch (error) {
+                console.error(`Error:`, error);
+            }
+
+            await new Promise(r => setTimeout(r, 150));
+        }
+
+        console.log(`✅ Page done. Reloading for next batch...`);
+        return true; // More pages might exist
     }
 
-    const confirmDelete = confirm(`Found ${deleteForms.length} workflow runs. Are you sure you want to delete them?`);
-    if (!confirmDelete) return;
-
-    console.log(`Starting deletion of ${deleteForms.length} runs...`);
-
-    // 2. Iterate through forms and send background requests
-    let deletedCount = 0;
-
-    for (const form of deleteForms) {
-        const url = form.getAttribute('action');
-        const token = form.querySelector('input[name="authenticity_token"]').value;
+    // Check if we're auto-running after a reload
+    if (sessionStorage.getItem(STORAGE_KEY)) {
+        console.log("🔄 Auto-continuing deletion...");
+        const hasMore = await deleteAllOnPage();
+        if (hasMore) {
+            setTimeout(() => window.location.reload(), 1500);
+        }
+    } else {
+        // First run - ask for confirmation
+        const deleteForms = Array.from(document.querySelectorAll('dialog form'))
+            .filter(form => form.querySelector('input[name="_method"][value="delete"]'));
         
-        // Construct form data for the POST request (mimicking DELETE)
-        const formData = new URLSearchParams();
-        formData.append('_method', 'delete');
-        formData.append('authenticity_token', token);
+        if (deleteForms.length === 0) {
+            console.log("No workflow runs found on this page.");
+            return;
+        }
 
-        try {
-            // Send request without navigating
-            const response = await fetch(url, {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            });
-
-            if (response.ok) {
-                deletedCount++;
-                console.log(`[${deletedCount}/${deleteForms.length}] Deleted run: ${url.split('/').pop()}`);
-                
-                // Optional: Visually hide the row to indicate progress
-                // The dialog ID usually matches "delete-workflow-run-ID"
-                // We find the parent row by working back from the dialog
-                const dialogId = form.closest('dialog').id;
-                const openButton = document.querySelector(`button[data-show-dialog-id="${dialogId}"]`);
-                if(openButton) {
-                    const row = openButton.closest('.Box-row');
-                    if(row) row.style.display = 'none';
-                }
-            } else {
-                console.error(`Failed to delete ${url}: ${response.statusText}`);
+        if (confirm(`Delete ALL workflow runs? (Found ${deleteForms.length} on this page, will continue through all pages)`)) {
+            sessionStorage.setItem(STORAGE_KEY, 'true'); // Enable auto-continue
+            const hasMore = await deleteAllOnPage();
+            if (hasMore) {
+                setTimeout(() => window.location.reload(), 1500);
             }
-        } catch (error) {
-            console.error(`Error deleting ${url}:`, error);
         }
     }
-
-    console.log("Deletion process finished.");
-    
-    // 3. Reload page to reflect changes from server side
-    setTimeout(() => {
-        window.location.reload();
-    }, 1000);
-
 })();
